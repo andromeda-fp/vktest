@@ -1,0 +1,19 @@
+packages: .
+
+source-repository-package
+  type: git
+  location: https://github.com/well-typed/hs-bindgen
+  tag: 136cc6da98d41e3a0e9e397fdcbde21ecc16a492
+  subdir: hs-bindgen
+
+source-repository-package
+  type: git
+  location: https://github.com/well-typed/hs-bindgen
+  tag: 136cc6da98d41e3a0e9e397fdcbde21ecc16a492
+  subdir: hs-bindgen-runtime
+
+source-repository-package
+  type: git
+  location: https://github.com/well-typed/libclang-bindings
+  tag: 6a2ee571368cde88b727e7559e148cc025e5da58
+  subdir: libclang-bindings
