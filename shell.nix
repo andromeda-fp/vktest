@@ -6,12 +6,20 @@ pkgs.mkShell {
     pkgs.cabal-install
     pkgs.ghc
     pkgs.llvm
-    pkgs.libclang
+
     pkgs.pkg-config
     pkgs.vulkan-headers
     pkgs.vulkan-loader
+
+    pkgs.libX11
+    pkgs.libXrandr
+    pkgs.libXcursor
+    pkgs.libXi
+    pkgs.libxcb
+    pkgs.libxdmcp
   ];
   buildInputs = [
+    pkgs.libclang
     pkgs.libllvm
     pkgs.vulkan-headers
     pkgs.vulkan-loader

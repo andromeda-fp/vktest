@@ -24,8 +24,10 @@ module RGFW where
 import HsBindgen.Runtime.LibC
 import HsBindgen.TH
 
-let
-  conf = def{clang = def{extraIncludeDirs = [Dir "include"]}}
-  confTH = def{verbosity = Verbosity Warning}
+let conf = def{
+        clang = def{
+            extraIncludeDirs = [Dir "include"],
+            defineMacros = [ "RGFW_VULKAN=" ]}}
+    confTH = def{verbosity = Verbosity Warning}
  in
-  withHsBindgen conf confTH $ hashInclude "RGFW.h"
+    withHsBindgen conf confTH $ hashInclude "RGFW.h"
