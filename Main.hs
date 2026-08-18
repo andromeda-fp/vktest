@@ -1,3 +1,4 @@
+{-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -34,10 +35,7 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
            exts <- alloca $ \extension_count -> do
                exts <- RGFW.rGFW_getRequiredInstanceExtensions_Vulkan extension_count
                cexts <- peek extension_count
-               putStr $ show cexts
-               putStr " extensions required: "
                vexts <- processExtensions cexts exts V.empty
-               putStrLn $ show vexts
                return vexts
            Vk.withInstance (zero {Vk.enabledExtensionNames = exts}) Nothing bracket $ \i -> do
                withWindow "test window" 0 0 width height ((fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowCenter)) .|. (fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowNoResize))) $ \window -> do
@@ -48,11 +46,15 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
                    pdev <- pickPhysicalDevice pdevs surface
                    Vk.withDevice pdev zero Nothing bracket $ \dev -> do
                        qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
-                       queue <- Vk.getDeviceQueue dev (fromIntegral $ head $ getGraphicsQueues qfprops) 0
-                       putStrLn $ show queue
-                       ret <- gameloop window 0
-                       putStr "gameloop returned with code: "
-                       putStrLn $ show ret
+                       gqueueIndex <- return $ fromIntegral $ head $ getGraphicsQueues qfprops
+                       gqueue <- Vk.getDeviceQueue dev gqueueIndex 0
+                       pqueueIndex <- return . fromIntegral . head =<< getSurfaceSupport pdev surface
+                       pqueue <- Vk.getDeviceQueue dev pqueueIndex 0
+                       Vk.withCommandPool dev (zero {Vk.queueFamilyIndex = gqueueIndex, Vk.flags = Vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}) Nothing bracket $ \gpool -> do
+                           Vk.withCommandBuffers dev (zero {Vk.commandPool = gpool, Vk.level = Vk.COMMAND_BUFFER_LEVEL_PRIMARY, Vk.commandBufferCount = 2}) bracket $ \gcbuffer -> do
+                               ret <- gameloop window 0
+                               putStr "gameloop returned with code: "
+                               putStrLn $ show ret
 
 pickPhysicalDevice :: Vector Vk.PhysicalDevice -> Vk.SurfaceKHR -> IO Vk.PhysicalDevice
 pickPhysicalDevice pdevs surface = do
@@ -96,6 +98,7 @@ getSurfaceSupport' pdev surface i is = if i < 0 then return is else do
     then getSurfaceSupport' pdev surface (i - 1) (i:is)
     else getSurfaceSupport' pdev surface (i - 1) is
 
+-- checks that a device has the requisite capabilities
 isValidPhysicalDevice :: Vk.PhysicalDevice -> Vk.SurfaceKHR-> IO Bool
 isValidPhysicalDevice pdev surface = do
     qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
@@ -106,6 +109,7 @@ isValidPhysicalDevice pdev surface = do
     then return False
     else return True
 
+-- type conversion
 processExtensions :: CSize -> Ptr (ConstPtr CChar) -> Vector ByteString -> IO (Vector ByteString)
 processExtensions 0 _ extNames = return extNames
 processExtensions count strs extNames = do
