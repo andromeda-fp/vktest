@@ -26,7 +26,7 @@ import HsBindgen.TH
 
 let conf = def{
         clang = def{
-            extraIncludeDirs = [Dir "include"],
+            extraIncludeDirs = [Pkg "include"],
             defineMacros = [ "RGFW_VULKAN=" ]},
         programSlicing = EnableProgramSlicing}
     confTH = def{verbosity = Verbosity Warning}
