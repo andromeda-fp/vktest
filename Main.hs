@@ -1,15 +1,17 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 {-# LANGUAGE OverloadedRecordDot #-}
+{-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
 
 module Main (main) where
 
 import Control.Exception     (bracket)
 import Data.Bits             ((.|.), (.&.))
-import Data.ByteString       (ByteString, packCString)
+import Data.ByteString       (ByteString)
 import Data.Coerce           (coerce)
 import Data.Int              (Int32)
+import Data.List             ((\\))
 import Data.Vector           (Vector)
 import Foreign.C
 import Foreign.C.ConstPtr    (ConstPtr(..))
@@ -18,43 +20,76 @@ import Foreign.Marshal.Array (advancePtr)
 import Foreign.Ptr           (Ptr)
 import Foreign.Storable      (peek)
 import Unsafe.Coerce         (unsafeCoerce)
+import Vulkan.CStruct.Extends (SomeStruct(..))
 import Vulkan.Zero           (zero)
 
-import qualified Data.Vector                      as V
-import qualified RGFW                             as RGFW
-import qualified Vulkan.Core10                    as Vk
-import qualified Vulkan.Extensions.VK_KHR_surface as Vk
+import qualified Data.ByteString                    as BS
+import qualified Data.ByteString.Char8              as BSC
+import qualified Data.Vector                        as V
+import qualified RGFW                               as RGFW
+import qualified Vulkan.Core10                      as Vk
+import qualified Vulkan.Extensions.VK_KHR_surface   as Vk
+import qualified Vulkan.Extensions.VK_KHR_swapchain as Vk
 
 height :: Int32
 height = 400
 width :: Int32
 width = 800
 
+layers :: Vector ByteString
+layers = V.fromList $ map BSC.pack ["VK_LAYER_KHRONOS_validation"]
+
+extensions :: Vector ByteString
+extensions = V.fromList $ map BSC.pack ["VK_KHR_swapchain"]
+
 main :: IO ()
 main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_enum RGFW.RGFW_initVulkan) $ \_ -> do
-           exts <- alloca $ \extension_count -> do
-               exts <- RGFW.rGFW_getRequiredInstanceExtensions_Vulkan extension_count
-               cexts <- peek extension_count
-               vexts <- processExtensions cexts exts V.empty
-               return vexts
-           Vk.withInstance (zero {Vk.enabledExtensionNames = exts}) Nothing bracket $ \i -> do
-               withWindow "test window" 0 0 width height ((fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowCenter)) .|. (fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowNoResize))) $ \window -> do
-                   surface :: Vk.SurfaceKHR <- alloca $ \surfacePtr -> do
-                       RGFW.rGFW_window_createSurface_Vulkan window (coerce $ Vk.instanceHandle i) surfacePtr
-                       return . unsafeCoerce =<< peek surfacePtr
-                   (_, pdevs) <- Vk.enumeratePhysicalDevices i
-                   pdev <- pickPhysicalDevice pdevs surface
-                   Vk.withDevice pdev zero Nothing bracket $ \dev -> do
-                       qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
-                       gqueueIndex <- return $ fromIntegral $ head $ getGraphicsQueues qfprops
-                       gqueue <- Vk.getDeviceQueue dev gqueueIndex 0
-                       pqueueIndex <- return . fromIntegral . head =<< getSurfaceSupport pdev surface
-                       pqueue <- Vk.getDeviceQueue dev pqueueIndex 0
-                       Vk.withCommandPool dev (zero {Vk.queueFamilyIndex = gqueueIndex, Vk.flags = Vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}) Nothing bracket $ \gpool -> do
-                           Vk.withCommandBuffers dev (zero {Vk.commandPool = gpool, Vk.level = Vk.COMMAND_BUFFER_LEVEL_PRIMARY, Vk.commandBufferCount = 2}) bracket $ \gcbuffer -> do
-                               ret <- gameloop window 0
-                               putStr "gameloop returned with code: "
-                               putStrLn $ show ret
+    putStrLn $ show extensions
+    exts <- alloca $ \extension_count -> do
+        exts <- RGFW.rGFW_getRequiredInstanceExtensions_Vulkan extension_count
+        cexts <- peek extension_count
+        vexts <- processExtensions cexts exts V.empty
+        return vexts
+    Vk.withInstance (zero {Vk.enabledExtensionNames = exts, Vk.enabledLayerNames = layers}) Nothing bracket $ \i -> do
+        withWindow "test window" 0 0 width height ((fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowCenter)) .|. (fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowNoResize))) $ \window -> do
+            surface :: Vk.SurfaceKHR <- alloca $ \surfacePtr -> do
+                _ <- RGFW.rGFW_window_createSurface_Vulkan window (coerce $ Vk.instanceHandle i) surfacePtr
+                return . unsafeCoerce =<< peek surfacePtr
+            (_, pdevs) <- Vk.enumeratePhysicalDevices i
+            pdev <- pickPhysicalDevice pdevs surface
+            qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
+            gqueueIndex <- return $ fromIntegral $ head $ getGraphicsQueues qfprops
+            pqueueIndex <- return . fromIntegral . head =<< getSurfaceSupport pdev surface
+            Vk.withDevice pdev (zero { Vk.queueCreateInfos = V.fromList $ [ SomeStruct (zero :: Vk.DeviceQueueCreateInfo '[]) { Vk.queueFamilyIndex = gqueueIndex
+                                                                                                                              , Vk.queuePriorities = V.fromList [1.0]}]
+                                                                              ++ if gqueueIndex == pqueueIndex then [] else [ SomeStruct (zero :: Vk.DeviceQueueCreateInfo '[]) { Vk.queueFamilyIndex = pqueueIndex
+                                                                                                                                                                                , Vk.queuePriorities = V.fromList [1.0]}]
+                                     , Vk.enabledExtensionNames = extensions
+                                     }) Nothing bracket $ \dev -> do
+                gqueue <- Vk.getDeviceQueue dev gqueueIndex 0
+                pqueue <- Vk.getDeviceQueue dev pqueueIndex 0
+                Vk.withCommandPool dev (zero {Vk.queueFamilyIndex = gqueueIndex, Vk.flags = Vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT}) Nothing bracket $ \gpool -> do
+                    Vk.withCommandBuffers dev (zero {Vk.commandPool = gpool, Vk.level = Vk.COMMAND_BUFFER_LEVEL_PRIMARY, Vk.commandBufferCount = 2}) bracket $ \gcbuffer -> do
+                        putStrLn "made command buffer"
+                        caps <- Vk.getPhysicalDeviceSurfaceCapabilitiesKHR pdev surface
+                        putStrLn $ show caps
+                        (_, forms) <- Vk.getPhysicalDeviceSurfaceFormatsKHR pdev surface
+                        putStrLn $ show forms
+                        Vk.withSwapchainKHR dev zero { Vk.clipped = True
+                                                     , Vk.surface = surface
+                                                     , Vk.imageUsage = Vk.IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                                                     , Vk.preTransform = Vk.SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                                     , Vk.imageArrayLayers = 1
+                                                     , Vk.imageExtent = caps.currentExtent
+                                                     , Vk.minImageCount = caps.minImageCount
+                                                     , Vk.compositeAlpha = Vk.COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+                                                     , Vk.imageFormat = (V.head forms).format -- TODO fetch the best format
+                                                     , Vk.imageColorSpace = (V.head forms).colorSpace
+						     } Nothing bracket $ \swapchain -> do
+                            putStrLn "made swapchain"
+                            ret <- gameloop window 0
+                            putStr "gameloop returned with code: "
+                            putStrLn $ show ret
 
 pickPhysicalDevice :: Vector Vk.PhysicalDevice -> Vk.SurfaceKHR -> IO Vk.PhysicalDevice
 pickPhysicalDevice pdevs surface = do
@@ -103,9 +138,12 @@ isValidPhysicalDevice :: Vk.PhysicalDevice -> Vk.SurfaceKHR-> IO Bool
 isValidPhysicalDevice pdev surface = do
     qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
     surfaceSupport <- getSurfaceSupport pdev surface
+    (_, caps) <- Vk.enumerateDeviceExtensionProperties pdev Nothing
     if null $ getGraphicsQueues qfprops
     then return False
     else if null surfaceSupport
+    then return False
+    else if [] /= ((V.toList extensions) \\ (V.toList $ V.map (\p -> p.extensionName) caps))
     then return False
     else return True
 
@@ -114,7 +152,7 @@ processExtensions :: CSize -> Ptr (ConstPtr CChar) -> Vector ByteString -> IO (V
 processExtensions 0 _ extNames = return extNames
 processExtensions count strs extNames = do
     str <- peek strs
-    extName <- packCString (coerce str)
+    extName <- BS.packCString (coerce str)
     processExtensions (count - 1) (advancePtr strs 1) $ V.snoc extNames extName
 
 gameloop :: Ptr RGFW.RGFW_window -> RGFW.RGFW_bool  -> IO ()

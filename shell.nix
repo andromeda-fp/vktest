@@ -6,10 +6,12 @@ pkgs.mkShell {
     pkgs.cabal-install
     pkgs.ghc
     pkgs.llvm
+    pkgs.vulkan-tools
 
     pkgs.pkg-config
     pkgs.vulkan-headers
     pkgs.vulkan-loader
+    pkgs.vulkan-validation-layers
 
     pkgs.libX11
     pkgs.libXrandr
