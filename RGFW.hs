@@ -27,7 +27,8 @@ import HsBindgen.TH
 let conf = def{
         clang = def{
             extraIncludeDirs = [Dir "include"],
-            defineMacros = [ "RGFW_VULKAN=" ]}}
+            defineMacros = [ "RGFW_VULKAN=" ]},
+        programSlicing = EnableProgramSlicing}
     confTH = def{verbosity = Verbosity Warning}
  in
     withHsBindgen conf confTH $ hashInclude "RGFW.h"

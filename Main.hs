@@ -13,7 +13,7 @@ import           Foreign.C
 import           Foreign.C.ConstPtr            (ConstPtr(..))
 import           Foreign.Marshal.Alloc         (alloca)
 import           Foreign.Marshal.Array         (advancePtr)
-import           Foreign.Ptr                   (Ptr)
+import           Foreign.Ptr                   (Ptr, nullPtr)
 import           Foreign.Storable              (peek)
 import qualified RGFW                  as RGFW
 import qualified Vulkan.Core10         as Vk
@@ -37,7 +37,7 @@ main = withRGFW "rgfw instance title" 0 $ \_ -> do
            Vk.withInstance (zero {Vk.enabledExtensionNames = exts}) Nothing bracket $ \i -> do
                putStrLn $ show i
                withWindow "test window" 0 0 width height ((fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowCenter)) .|. (fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowNoResize))) $ \window -> do
-                   res <- RGFW.rGFW_window_createSurface_Vulkan window i nullPtr
+                   res <- RGFW.rGFW_window_createSurface_Vulkan window (coerce $ Vk.instanceHandle i) nullPtr
                    ret <- gameloop window 0
                    putStr "gameloop returned with code: "
                    putStrLn $ show ret

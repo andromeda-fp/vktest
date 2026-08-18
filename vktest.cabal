@@ -28,5 +28,5 @@ executable vktest
     include-dirs:     include
     hs-source-dirs:   .
     c-sources:        shim.c
-    ghc-options:      -Wall
+    ghc-options:      -Wall -optc-DRGFW_VULKAN
     default-language: Haskell2010
