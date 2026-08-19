@@ -47,9 +47,9 @@ layers = V.fromList $ map BSC.pack ["VK_LAYER_KHRONOS_validation"]
 extensions :: Vector ByteString
 extensions = V.fromList $ map BSC.pack ["VK_KHR_swapchain"]
 
-frag = $( do
+frag = $(do
     fragPath <- runIO $ makeAbsolute "assets/shaders/frag.spv"
-    runCompilationsTH [("Fragment Shader", compileTo fragPath [] Shaders.fragment)])
+    runCompilationsTH [("Fragment Shader", compileTo fragPath [] Shaders.fragment)] )
 
 main :: IO ()
 main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_enum RGFW.RGFW_initVulkan) $ \_ -> do
