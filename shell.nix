@@ -7,6 +7,7 @@ pkgs.mkShell {
     pkgs.haskell.compiler.ghc914
     pkgs.llvm
     pkgs.vulkan-tools
+    pkgs.spirv-tools
 
     pkgs.pkg-config
     pkgs.vulkan-headers

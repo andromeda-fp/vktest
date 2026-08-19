@@ -3,30 +3,35 @@
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 
 module Main (main) where
 
-import Control.Exception     (bracket)
-import Data.Bits             ((.|.), (.&.))
-import Data.ByteString       (ByteString)
-import Data.Coerce           (coerce)
-import Data.Int              (Int32)
-import Data.List             ((\\))
-import Data.Vector           (Vector)
+import Control.Exception      (bracket)
+import Data.Bits              ((.|.), (.&.))
+import Data.ByteString        (ByteString)
+import Data.Coerce            (coerce)
+import Data.Int               (Int32)
+import Data.List              ((\\))
+import Data.Vector            (Vector)
+import FIR                    (compileTo, runCompilationsTH)
 import Foreign.C
-import Foreign.C.ConstPtr    (ConstPtr(..))
-import Foreign.Marshal.Alloc (alloca)
-import Foreign.Marshal.Array (advancePtr)
-import Foreign.Ptr           (Ptr)
-import Foreign.Storable      (peek)
-import Unsafe.Coerce         (unsafeCoerce)
+import Foreign.C.ConstPtr     (ConstPtr(..))
+import Foreign.Marshal.Alloc  (alloca)
+import Foreign.Marshal.Array  (advancePtr)
+import Foreign.Ptr            (Ptr)
+import Foreign.Storable       (peek)
+import Language.Haskell.TH    (runIO)
+import System.Directory       (makeAbsolute)
+import Unsafe.Coerce          (unsafeCoerce)
 import Vulkan.CStruct.Extends (SomeStruct(..))
-import Vulkan.Zero           (zero)
+import Vulkan.Zero            (zero)
 
 import qualified Data.ByteString                    as BS
 import qualified Data.ByteString.Char8              as BSC
 import qualified Data.Vector                        as V
 import qualified RGFW                               as RGFW
+import qualified Shaders                            as Shaders
 import qualified Vulkan.Core10                      as Vk
 import qualified Vulkan.Extensions.VK_KHR_surface   as Vk
 import qualified Vulkan.Extensions.VK_KHR_swapchain as Vk
@@ -42,9 +47,12 @@ layers = V.fromList $ map BSC.pack ["VK_LAYER_KHRONOS_validation"]
 extensions :: Vector ByteString
 extensions = V.fromList $ map BSC.pack ["VK_KHR_swapchain"]
 
+frag = $( do
+    fragPath <- runIO $ makeAbsolute "assets/shaders/frag.spv"
+    runCompilationsTH [("Fragment Shader", compileTo fragPath [] Shaders.fragment)])
+
 main :: IO ()
 main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_enum RGFW.RGFW_initVulkan) $ \_ -> do
-    putStrLn $ show extensions
     exts <- alloca $ \extension_count -> do
         exts <- RGFW.rGFW_getRequiredInstanceExtensions_Vulkan extension_count
         cexts <- peek extension_count
@@ -94,7 +102,7 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
                                                                                                       , Vk.subresourceRange = zero { Vk.aspectMask = Vk.IMAGE_ASPECT_COLOR_BIT
                                                                                                                                    , Vk.levelCount = Vk.REMAINING_MIP_LEVELS
                                                                                                                                    , Vk.layerCount = Vk.REMAINING_ARRAY_LAYERS
-																   }
+                                                                                                                                   }
                                                                                                       , Vk.format = (V.head forms).format -- TODO fetch the best format
                                                                                                       }) images) Nothing $ \imageViews -> do
                                 Vk.withRenderPass dev zero { Vk.subpasses = V.fromList [zero {Vk.pipelineBindPoint = Vk.PIPELINE_BIND_POINT_GRAPHICS}]
@@ -182,7 +190,7 @@ withImageViews :: Vk.Device -> Vector (Vk.ImageViewCreateInfo '[]) -> Maybe Vk.A
 withImageViews dev infos alloc io = do
     imageViews <- mapM (\(info) -> Vk.createImageView dev info alloc) infos
     o0 <- io imageViews
-    mapM (\imageView -> Vk.destroyImageView dev imageView alloc) imageViews
+    _ <- mapM (\imageView -> Vk.destroyImageView dev imageView alloc) imageViews
     return o0
 
 withWindow :: String -> Int32 -> Int32 -> Int32 -> Int32 -> RGFW.RGFW_windowFlags -> (Ptr RGFW.RGFW_window -> IO r) -> IO r
