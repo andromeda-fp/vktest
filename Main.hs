@@ -60,10 +60,9 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
             qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
             gqueueIndex <- return $ fromIntegral $ head $ getGraphicsQueues qfprops
             pqueueIndex <- return . fromIntegral . head =<< getSurfaceSupport pdev surface
-            Vk.withDevice pdev (zero { Vk.queueCreateInfos = V.fromList $ [ SomeStruct (zero :: Vk.DeviceQueueCreateInfo '[]) { Vk.queueFamilyIndex = gqueueIndex
-                                                                                                                              , Vk.queuePriorities = V.fromList [1.0]}]
-                                                                              ++ if gqueueIndex == pqueueIndex then [] else [ SomeStruct (zero :: Vk.DeviceQueueCreateInfo '[]) { Vk.queueFamilyIndex = pqueueIndex
-                                                                                                                                                                                , Vk.queuePriorities = V.fromList [1.0]}]
+            queueCreateInfos <- return $ [(zero :: Vk.DeviceQueueCreateInfo '[]) { Vk.queueFamilyIndex = gqueueIndex, Vk.queuePriorities = V.fromList [1.0]}]
+                                           ++ if gqueueIndex == pqueueIndex then [] else [(zero :: Vk.DeviceQueueCreateInfo '[]) { Vk.queueFamilyIndex = pqueueIndex, Vk.queuePriorities = V.fromList [1.0]}]
+            Vk.withDevice pdev (zero { Vk.queueCreateInfos = V.fromList $ map (SomeStruct) queueCreateInfos
                                      , Vk.enabledExtensionNames = extensions
                                      }) Nothing bracket $ \dev -> do
                 gqueue <- Vk.getDeviceQueue dev gqueueIndex 0
@@ -76,20 +75,40 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
                         (_, forms) <- Vk.getPhysicalDeviceSurfaceFormatsKHR pdev surface
                         putStrLn $ show forms
                         Vk.withSwapchainKHR dev zero { Vk.clipped = True
-                                                     , Vk.surface = surface
-                                                     , Vk.imageUsage = Vk.IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                                                     , Vk.preTransform = Vk.SURFACE_TRANSFORM_IDENTITY_BIT_KHR
-                                                     , Vk.imageArrayLayers = 1
-                                                     , Vk.imageExtent = caps.currentExtent
-                                                     , Vk.minImageCount = caps.minImageCount
                                                      , Vk.compositeAlpha = Vk.COMPOSITE_ALPHA_OPAQUE_BIT_KHR
-                                                     , Vk.imageFormat = (V.head forms).format -- TODO fetch the best format
+                                                     , Vk.imageArrayLayers = 1
                                                      , Vk.imageColorSpace = (V.head forms).colorSpace
-						     } Nothing bracket $ \swapchain -> do
+                                                     , Vk.imageExtent = caps.currentExtent
+                                                     , Vk.imageFormat = (V.head forms).format -- TODO fetch the best format
+                                                     , Vk.imageSharingMode = if length queueCreateInfos > 1 then Vk.SHARING_MODE_CONCURRENT else Vk.SHARING_MODE_EXCLUSIVE
+                                                     , Vk.imageUsage = Vk.IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+                                                     , Vk.minImageCount = caps.minImageCount
+                                                     , Vk.preTransform = Vk.SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+                                                     , Vk.surface = surface
+                                                     } Nothing bracket $ \swapchain -> do
                             putStrLn "made swapchain"
-                            ret <- gameloop window 0
-                            putStr "gameloop returned with code: "
-                            putStrLn $ show ret
+                            (_, images) <- Vk.getSwapchainImagesKHR dev swapchain
+                            putStrLn $ show images
+                            withImageViews dev (V.map (\image -> (zero :: Vk.ImageViewCreateInfo '[]) { Vk.image = image
+                                                                                                      , Vk.viewType = Vk.IMAGE_VIEW_TYPE_2D
+                                                                                                      , Vk.subresourceRange = zero { Vk.aspectMask = Vk.IMAGE_ASPECT_COLOR_BIT
+                                                                                                                                   , Vk.levelCount = Vk.REMAINING_MIP_LEVELS
+                                                                                                                                   , Vk.layerCount = Vk.REMAINING_ARRAY_LAYERS
+																   }
+                                                                                                      , Vk.format = (V.head forms).format -- TODO fetch the best format
+                                                                                                      }) images) Nothing $ \imageViews -> do
+                                Vk.withRenderPass dev zero { Vk.subpasses = V.fromList [zero {Vk.pipelineBindPoint = Vk.PIPELINE_BIND_POINT_GRAPHICS}]
+                                                           } Nothing bracket $ \pass -> do
+                                    putStrLn "made pass"
+                                    Vk.withFramebuffer dev zero { Vk.height = fromIntegral height
+                                                                , Vk.width = fromIntegral width
+                                                                , Vk.renderPass = pass
+                                                                , Vk.layers = 1
+                                                                } Nothing bracket $ \fb -> do
+                                        putStrLn "made fb"
+                                        ret <- gameloop window 0
+                                        putStr "gameloop returned with code: "
+                                        putStrLn $ show ret
 
 pickPhysicalDevice :: Vector Vk.PhysicalDevice -> Vk.SurfaceKHR -> IO Vk.PhysicalDevice
 pickPhysicalDevice pdevs surface = do
@@ -158,6 +177,13 @@ processExtensions count strs extNames = do
 gameloop :: Ptr RGFW.RGFW_window -> RGFW.RGFW_bool  -> IO ()
 gameloop window 0 = gameloop window =<< RGFW.rGFW_window_shouldClose window
 gameloop _ _ = return ()
+
+withImageViews :: Vk.Device -> Vector (Vk.ImageViewCreateInfo '[]) -> Maybe Vk.AllocationCallbacks -> (Vector Vk.ImageView -> IO r) -> IO r
+withImageViews dev infos alloc io = do
+    imageViews <- mapM (\(info) -> Vk.createImageView dev info alloc) infos
+    o0 <- io imageViews
+    mapM (\imageView -> Vk.destroyImageView dev imageView alloc) imageViews
+    return o0
 
 withWindow :: String -> Int32 -> Int32 -> Int32 -> Int32 -> RGFW.RGFW_windowFlags -> (Ptr RGFW.RGFW_window -> IO r) -> IO r
 withWindow name x y w h flags io = withCString name $ \str -> do
