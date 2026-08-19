@@ -17,3 +17,11 @@ source-repository-package
   location: https://github.com/well-typed/libclang-bindings
   tag: 6a2ee571368cde88b727e7559e148cc025e5da58
   subdir: libclang-bindings
+
+source-repository-package
+  type: git
+  location: https://gitlab.com/sheaf/fir.git
+  tag: c0d4981a6aae1500bb9df7fb63481b68f0b7abef
+
+allow-newer: debruijn:base
+allow-newer: skew-list:base

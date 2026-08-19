@@ -18,6 +18,7 @@ executable vktest
                       vulkan     >= 3.27,
                       hs-bindgen,
                       hs-bindgen-runtime,
+                      fir,
     pkgconfig-depends:
                       x11,
                       xrandr,

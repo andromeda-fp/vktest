@@ -4,7 +4,7 @@ in
 pkgs.mkShell {
   packages = [
     pkgs.cabal-install
-    pkgs.ghc
+    pkgs.haskell.compiler.ghc914
     pkgs.llvm
     pkgs.vulkan-tools
 
