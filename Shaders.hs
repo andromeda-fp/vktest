@@ -25,7 +25,7 @@ vertex :: ShaderModule "main" VertexShader VertexDefs _
 vertex = shader  do
     i <- get @"gl_VertexIndex"
     (Vec2 x y) <- let' $ atv3v2f vertices i (Vec2 0 0)
-    put @"gl_Position" (Vec4 x y 0.0 1.0)
+    put @"gl_Position" (Vec4 x y 0 1)
 
 type FragmentDefs =
     '[ "main"      ':-> EntryPoint '[ OriginUpperLeft ] Fragment
@@ -34,7 +34,7 @@ type FragmentDefs =
 
 fragment :: ShaderModule "main" FragmentShader FragmentDefs _
 fragment = shader do
-    put @"out_color" (Vec4 1.0 1.0 0.0 1.0)
+    put @"out_color" (Vec4 1.0 0.0 1.0 1.0)
 
 atv3v2f :: Code (V 3 (V 2 Float)) -> Code Word32 -> Code (V 2 Float) -> Code (V 2 Float)
 atv3v2f (Vec3 x y z) i d =

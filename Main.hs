@@ -83,18 +83,14 @@ instanceConfig exts =
          , Vk.enabledExtensionNames = exts
          }
 
-deviceConfig :: Word32 -> Vk.DeviceCreateInfo '[Vk.PhysicalDeviceVulkan13Features, Vk.PhysicalDeviceVulkan12Features]
+deviceConfig :: Word32 -> Vk.DeviceCreateInfo '[Vk.PhysicalDeviceVulkan13Features]
 deviceConfig gqueueIndex =
-    zero { Vk.next = (vkFeatures13, (vkFeatures12, ()))
+    zero { Vk.next = (vkFeatures13, ())
          , Vk.queueCreateInfos = V.singleton $ SomeStruct zero { Vk.queueFamilyIndex = gqueueIndex
                                                                , Vk.queuePriorities = V.singleton 1
                                                                }
          , Vk.enabledExtensionNames = extensions
          }
-
-vkFeatures12 :: Vk.PhysicalDeviceVulkan12Features
-vkFeatures12 =
-    zero
 
 vkFeatures13 :: Vk.PhysicalDeviceVulkan13Features
 vkFeatures13 =
@@ -276,7 +272,7 @@ gameloop' dev q pipeline swapchain imageViews images cbuffers queue sImageAcquir
                                                           , Vk.extent = q.surfaceCapabilities.currentExtent
                                                           }
             Vk.cmdBindPipeline cbuffer Vk.PIPELINE_BIND_POINT_GRAPHICS pipeline
-            Vk.cmdDraw cbuffer 3 0 0 0
+            Vk.cmdDraw cbuffer 3 1 0 0
         Vk.cmdPipelineBarrier2 cbuffer $ zero { Vk.imageMemoryBarriers = V.singleton $ SomeStruct zero { Vk.srcStageMask = Vk.PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
                                                                                                        , Vk.srcAccessMask = Vk.ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
                                        	                                                               , Vk.dstStageMask = Vk.PIPELINE_STAGE_2_NONE
