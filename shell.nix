@@ -8,6 +8,7 @@ pkgs.mkShell {
     pkgs.llvm
     pkgs.vulkan-tools
     pkgs.spirv-tools
+    pkgs.spirv-cross
 
     pkgs.pkg-config
     pkgs.vulkan-headers
