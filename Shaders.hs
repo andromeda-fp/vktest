@@ -24,7 +24,7 @@ type VertexDefs =
 vertex :: ShaderModule "main" VertexShader VertexDefs _
 vertex = shader  do
     i <- get @"gl_VertexIndex"
-    let (Vec2 x y) = atv3v2f vertices i (Vec2 0 0)
+    (Vec2 x y) <- let' $ atv3v2f vertices i (Vec2 0 0)
     put @"gl_Position" (Vec4 x y 0.0 1.0)
 
 type FragmentDefs =

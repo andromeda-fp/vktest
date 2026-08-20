@@ -33,5 +33,7 @@ pkgs.mkShell {
     export BINDGEN_EXTRA_CLANG_ARGS
     BINDGEN_BUILTIN_INCLUDE_DIR=disable
     export BINDGEN_BUILTIN_INCLUDE_DIR
+    VK_INSTANCE_LAYERS=VK_LAYER_KHRONOS_validation
+    export VK_INSTANCE_LAYERS
   '';
 }

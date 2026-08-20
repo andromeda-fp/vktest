@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds #-}
 {-# LANGUAGE DuplicateRecordFields #-}
+{-# LANGUAGE NondecreasingIndentation #-}
 {-# LANGUAGE OverloadedRecordDot #-}
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
@@ -14,7 +15,8 @@ import Data.Coerce            (coerce)
 import Data.Int               (Int32)
 import Data.List              ((\\))
 import Data.Vector            (Vector)
-import FIR                    (compileTo, runCompilationsTH, CompilerFlag(SPIRV), Version(..))
+import Data.Word              (Word32)
+import FIR                    (compileTo, runCompilationsTH)
 import Foreign.C
 import Foreign.C.ConstPtr     (ConstPtr(..))
 import Foreign.Marshal.Alloc  (alloca)
@@ -31,6 +33,8 @@ import qualified Data.Vector                        as V
 import qualified RGFW                               as RGFW
 import qualified Shaders                            as Shaders
 import qualified Vulkan.Core10                      as Vk
+import qualified Vulkan.Core12                      as Vk
+import qualified Vulkan.Core13                      as Vk
 import qualified Vulkan.Extensions.VK_KHR_surface   as Vk
 import qualified Vulkan.Extensions.VK_KHR_swapchain as Vk
 
@@ -45,8 +49,138 @@ layers = V.fromList $ map BSC.pack ["VK_LAYER_KHRONOS_validation"]
 extensions :: Vector ByteString
 extensions = V.fromList $ map BSC.pack ["VK_KHR_swapchain"]
 
-vert = $( runCompilationsTH [("Fragment Shader", compileTo Shaders.vertPath [SPIRV (Version 1 0)] Shaders.vertex)] )
-frag = $( runCompilationsTH [("Fragment Shader", compileTo Shaders.fragPath [SPIRV (Version 1 0)] Shaders.fragment)] )
+vert = $( runCompilationsTH [("Fragment Shader", compileTo Shaders.vertPath [] Shaders.vertex)] )
+frag = $( runCompilationsTH [("Fragment Shader", compileTo Shaders.fragPath [] Shaders.fragment)] )
+
+data Consts = Consts
+    { title          :: String
+    , vkApiVersion   :: Word32
+    , framesInFlight :: Word32
+    }
+    deriving Show
+
+consts =
+    Consts
+    { title          = "game title"
+    , vkApiVersion   = Vk.API_VERSION_1_3
+    , framesInFlight = 2
+    }
+
+-- for a given physical device and surface
+data QueriedData = QueriedData
+    { surfaceCapabilities      :: Vk.SurfaceCapabilitiesKHR
+    , surfaceSupport           :: [Int]
+    , surfaceFormats           :: Vector Vk.SurfaceFormatKHR
+    , queueFamilyProperties    :: Vector Vk.QueueFamilyProperties
+    , extensionProperties      :: Vector Vk.ExtensionProperties
+    , physicalDeviceProperties :: Vk.PhysicalDeviceProperties
+    }
+    deriving Show
+
+instanceConfig :: Vector ByteString -> Vk.InstanceCreateInfo '[]
+instanceConfig exts =
+    zero { Vk.applicationInfo = Just (zero :: Vk.ApplicationInfo) { Vk.apiVersion = consts.vkApiVersion }
+         , Vk.enabledExtensionNames = exts
+         }
+
+deviceConfig :: Word32 -> Vk.DeviceCreateInfo '[Vk.PhysicalDeviceVulkan13Features, Vk.PhysicalDeviceVulkan12Features]
+deviceConfig gqueueIndex =
+    zero { Vk.next = (vkFeatures13, (vkFeatures12, ()))
+         , Vk.queueCreateInfos = V.singleton $ SomeStruct zero { Vk.queueFamilyIndex = gqueueIndex
+                                                               , Vk.queuePriorities = V.singleton 1
+                                                               }
+         , Vk.enabledExtensionNames = extensions
+         }
+
+vkFeatures12 :: Vk.PhysicalDeviceVulkan12Features
+vkFeatures12 =
+    zero
+
+vkFeatures13 :: Vk.PhysicalDeviceVulkan13Features
+vkFeatures13 =
+    zero { Vk.synchronization2 = True
+         , Vk.dynamicRendering = True
+         }
+
+commandPoolConfig :: Word32 -> Vk.CommandPoolCreateInfo '[]
+commandPoolConfig gqueueIndex =
+    zero { Vk.queueFamilyIndex = gqueueIndex
+         , Vk.flags = Vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
+         }
+
+commandBufferConfig :: Vk.CommandPool -> Vk.CommandBufferAllocateInfo
+commandBufferConfig gpool =
+    zero { Vk.commandPool = gpool
+         , Vk.level = Vk.COMMAND_BUFFER_LEVEL_PRIMARY
+         , Vk.commandBufferCount = consts.framesInFlight
+         }
+
+swapchainConfig :: QueriedData -> Vk.SurfaceKHR -> Vk.SwapchainCreateInfoKHR '[]
+swapchainConfig q surface =
+    zero { Vk.compositeAlpha = Vk.COMPOSITE_ALPHA_OPAQUE_BIT_KHR
+         , Vk.imageArrayLayers = 1
+         , Vk.imageColorSpace = Vk.COLORSPACE_SRGB_NONLINEAR_KHR
+         , Vk.imageExtent = q.surfaceCapabilities.currentExtent
+         , Vk.imageFormat = (V.head q.surfaceFormats).format
+         , Vk.imageUsage = Vk.IMAGE_USAGE_COLOR_ATTACHMENT_BIT
+         , Vk.minImageCount = q.surfaceCapabilities.minImageCount
+         , Vk.presentMode = Vk.PRESENT_MODE_FIFO_KHR
+         , Vk.preTransform = Vk.SURFACE_TRANSFORM_IDENTITY_BIT_KHR
+         , Vk.surface = surface
+         }
+
+imageViewConfigs :: Vector Vk.Image -> QueriedData -> Vector (Vk.ImageViewCreateInfo '[])
+imageViewConfigs images q =
+    V.map (\image -> (zero :: Vk.ImageViewCreateInfo '[]) { Vk.image = image
+                                                          , Vk.viewType = Vk.IMAGE_VIEW_TYPE_2D
+                                                          , Vk.subresourceRange = zero { Vk.aspectMask = Vk.IMAGE_ASPECT_COLOR_BIT
+                                                                                       , Vk.levelCount = Vk.REMAINING_MIP_LEVELS
+                                                                                       , Vk.layerCount = Vk.REMAINING_ARRAY_LAYERS
+                                                                                       }
+                                                          , Vk.format = (V.head q.surfaceFormats).format
+                                                          }) images
+
+pipelineLayoutConfig :: Vk.PipelineLayoutCreateInfo
+pipelineLayoutConfig =
+    zero
+
+graphicsPipelineConfig :: QueriedData -> Vk.ShaderModule -> Vk.ShaderModule -> Vk.PipelineLayout -> Vk.GraphicsPipelineCreateInfo '[Vk.PipelineRenderingCreateInfo]
+graphicsPipelineConfig q vertMod fragMod pipelineLayout =
+    zero { Vk.next = (pipelineRenderingConfig q, ())
+         , Vk.stages = V.map (SomeStruct) $ V.fromList [ zero { Vk.stage = Vk.SHADER_STAGE_VERTEX_BIT
+                                                              , Vk.module' = vertMod
+                                                              , Vk.name = "main"
+                                                              }
+                                                       , zero { Vk.stage = Vk.SHADER_STAGE_FRAGMENT_BIT
+                                                              , Vk.module' = fragMod
+                                                              , Vk.name = "main"
+                                                              }]
+         , Vk.vertexInputState = Just zero
+         , Vk.inputAssemblyState = Just zero { Vk.topology = Vk.PRIMITIVE_TOPOLOGY_TRIANGLE_LIST }
+         , Vk.tessellationState = Nothing
+         , Vk.viewportState = Just $ SomeStruct zero { Vk.viewports = V.fromList [zero { Vk.x = 0
+                                                                                       , Vk.y = 0
+                                                                                       , Vk.width = fromIntegral q.surfaceCapabilities.currentExtent.width
+                                                                                       , Vk.height = fromIntegral q.surfaceCapabilities.currentExtent.height
+                                                                                       , Vk.minDepth = 0
+                                                                                       , Vk.maxDepth = 1
+                                                                                       }]
+                                                     , Vk.scissors = V.fromList [(zero :: Vk.Rect2D) { Vk.offset = zero
+                                                                                                     , Vk.extent = q.surfaceCapabilities.currentExtent
+                                                                                                     }]
+                                                     }
+
+         , Vk.rasterizationState = Just $ SomeStruct zero { Vk.lineWidth = 1 }
+         , Vk.multisampleState = Just $ SomeStruct zero { Vk.rasterizationSamples = Vk.SAMPLE_COUNT_1_BIT }
+         , Vk.depthStencilState = Just zero
+         , Vk.colorBlendState = Just $ SomeStruct zero { Vk.attachments = V.singleton zero { Vk.colorWriteMask = Vk.COLOR_COMPONENT_R_BIT .|. Vk.COLOR_COMPONENT_G_BIT .|. Vk.COLOR_COMPONENT_B_BIT .|. Vk.COLOR_COMPONENT_A_BIT }}
+         , Vk.dynamicState = Just zero { Vk.dynamicStates = V.fromList [Vk.DYNAMIC_STATE_VIEWPORT, Vk.DYNAMIC_STATE_SCISSOR] }
+         , Vk.layout = pipelineLayout
+         }
+
+pipelineRenderingConfig :: QueriedData -> Vk.PipelineRenderingCreateInfo
+pipelineRenderingConfig q =
+    zero { Vk.colorAttachmentFormats = V.singleton (V.head q.surfaceFormats).format }
 
 main :: IO ()
 main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_enum RGFW.RGFW_initVulkan) $ \_ -> do
@@ -55,199 +189,146 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
         cexts <- peek extension_count
         vexts <- processExtensions cexts exts V.empty
         return vexts
-    Vk.withInstance (zero { Vk.applicationInfo = Just (zero :: Vk.ApplicationInfo) { Vk.apiVersion = Vk.API_VERSION_1_0 }
-                          , Vk.enabledExtensionNames = exts
-                          , Vk.enabledLayerNames = layers
-                          }) Nothing bracket $ \i -> do
-        withWindow "test window" 0 0 width height ((fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowCenter)) .|. (fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowNoResize))) $ \window -> do
-            surface :: Vk.SurfaceKHR <- alloca $ \surfacePtr -> do
-                _ <- RGFW.rGFW_window_createSurface_Vulkan window (coerce $ Vk.instanceHandle i) surfacePtr
-                return . unsafeCoerce =<< peek surfacePtr
-            (_, pdevs) <- Vk.enumeratePhysicalDevices i
-            pdev <- pickPhysicalDevice pdevs surface
-            qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
-            let gqueueIndex = fromIntegral $ head $ getGraphicsQueues qfprops
-            pqueueIndex <- return . fromIntegral . head =<< getSurfaceSupport pdev surface
-            if pqueueIndex /= gqueueIndex then putStrLn "queues not the same index not supported, undefined ahead" else return ()
-            Vk.withDevice pdev (zero { Vk.queueCreateInfos = V.singleton $ SomeStruct zero { Vk.queueFamilyIndex = gqueueIndex
-                                                                                           , Vk.queuePriorities = V.singleton 1
-                                                                                           }
-                                     , Vk.enabledExtensionNames = extensions
-                                     }) Nothing bracket $ \dev -> do
-                gqueue <- Vk.getDeviceQueue dev gqueueIndex 0
-                Vk.withCommandPool dev (zero { Vk.queueFamilyIndex = gqueueIndex
-                                             , Vk.flags = Vk.COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT
-                                             }) Nothing bracket $ \gpool -> do
-                    Vk.withCommandBuffers dev (zero { Vk.commandPool = gpool
-                                                    , Vk.level = Vk.COMMAND_BUFFER_LEVEL_PRIMARY
-                                                    , Vk.commandBufferCount = 1
-                                                    }) bracket $ \cbuffers -> do
-                        let gcbuffer = V.head cbuffers
-                        caps <- Vk.getPhysicalDeviceSurfaceCapabilitiesKHR pdev surface
-                        (_, forms) <- Vk.getPhysicalDeviceSurfaceFormatsKHR pdev surface
-                        Vk.withSwapchainKHR dev zero { Vk.clipped = True
-                                                     , Vk.compositeAlpha = Vk.COMPOSITE_ALPHA_OPAQUE_BIT_KHR
-                                                     , Vk.imageArrayLayers = 1
-                                                     , Vk.imageColorSpace = (V.head forms).colorSpace
-                                                     , Vk.imageExtent = caps.currentExtent
-                                                     , Vk.imageFormat = (V.head forms).format
-                                                     , Vk.imageSharingMode = Vk.SHARING_MODE_EXCLUSIVE
-                                                     , Vk.imageUsage = Vk.IMAGE_USAGE_COLOR_ATTACHMENT_BIT
-                                                     , Vk.minImageCount = caps.minImageCount
-                                                     , Vk.presentMode = Vk.PRESENT_MODE_FIFO_KHR
-                                                     , Vk.preTransform = caps.currentTransform
-                                                     , Vk.queueFamilyIndices = V.singleton gqueueIndex
-                                                     , Vk.surface = surface
-                                                     } Nothing bracket $ \swapchain -> do
-                            (_, images) <- Vk.getSwapchainImagesKHR dev swapchain
-                            withImageViews dev (V.map (\image -> (zero :: Vk.ImageViewCreateInfo '[]) { Vk.image = image
-                                                                                                      , Vk.viewType = Vk.IMAGE_VIEW_TYPE_2D
-                                                                                                      , Vk.subresourceRange = zero { Vk.aspectMask = Vk.IMAGE_ASPECT_COLOR_BIT
-                                                                                                                                   , Vk.levelCount = Vk.REMAINING_MIP_LEVELS
-                                                                                                                                   , Vk.layerCount = Vk.REMAINING_ARRAY_LAYERS
-                                                                                                                                   }
-                                                                                                      , Vk.format = (V.head forms).format
-                                                                                                      }) images) Nothing $ \imageViews -> do
-                                let colorAttachmentRef = zero { Vk.attachment = 0
-                                                              , Vk.layout = Vk.IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
-                                                              }
-                                let colorAttachment = zero { Vk.format = (V.head forms).format
-                                                           , Vk.samples = Vk.SAMPLE_COUNT_1_BIT
-                                                           , Vk.loadOp = Vk.ATTACHMENT_LOAD_OP_CLEAR
-                                                           , Vk.storeOp = Vk.ATTACHMENT_STORE_OP_STORE
-                                                           , Vk.stencilLoadOp = Vk.ATTACHMENT_LOAD_OP_DONT_CARE
-                                                           , Vk.stencilStoreOp = Vk.ATTACHMENT_STORE_OP_DONT_CARE
-                                                           , Vk.initialLayout = Vk.IMAGE_LAYOUT_UNDEFINED
-                                                           , Vk.finalLayout = Vk.IMAGE_LAYOUT_PRESENT_SRC_KHR
-                                                           }
-                                Vk.withRenderPass dev zero { Vk.attachments = V.singleton colorAttachment
-                                                           , Vk.subpasses = V.singleton zero { Vk.pipelineBindPoint = Vk.PIPELINE_BIND_POINT_GRAPHICS
-                                                                                             , Vk.colorAttachments = V.singleton colorAttachmentRef
-                                                                                             }
-                                                           , Vk.dependencies = V.singleton zero { Vk.srcSubpass = Vk.SUBPASS_EXTERNAL
-                                                                                                , Vk.dstSubpass = 0
-                                                                                                , Vk.srcStageMask = Vk.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                                                                                , Vk.srcAccessMask = Vk.ACCESS_NONE
-                                                                                                , Vk.dstStageMask = Vk.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                                                                                , Vk.dstAccessMask = Vk.ACCESS_COLOR_ATTACHMENT_WRITE_BIT
-                                                                                                }
-                                                           } Nothing bracket $ \pass -> do
-                                    let fb = zero { Vk.height = caps.currentExtent.height
-                                                  , Vk.width = caps.currentExtent.width
-                                                  , Vk.renderPass = pass
-                                                  , Vk.layers = 1
-                                                  }
-                                    let infos = V.map (\image -> (fb :: Vk.FramebufferCreateInfo '[]) { Vk.attachments = V.singleton image }) imageViews
-                                    withFramebuffers dev infos Nothing $ \fbs -> do
-                                        rawVert <- BS.readFile Shaders.vertPath
-                                        rawFrag <- BS.readFile Shaders.fragPath
-                                        withShaderModules dev (V.fromList [ zero { Vk.code = rawVert }, zero { Vk.code = rawFrag } ]) Nothing $ \mods -> do
-                                            let vertMod = V.head mods
-                                            let fragMod = V.head $ V.tail mods
-                                            Vk.withPipelineLayout dev zero Nothing bracket $ \pipelineLayout -> do
-                                                Vk.withGraphicsPipelines dev zero (V.map (SomeStruct) $ V.fromList [zero { Vk.stages = V.map (SomeStruct) $ V.fromList [ zero { Vk.stage = Vk.SHADER_STAGE_VERTEX_BIT
-                                                                                                                                                                              , Vk.module' = vertMod
-                                                                                                                                                                              , Vk.name = "main"
-                                                                                                                                                                              }
-                                                                                                                                                                       , zero { Vk.stage = Vk.SHADER_STAGE_FRAGMENT_BIT
-                                                                                                                                                                              , Vk.module' = fragMod
-                                                                                                                                                                              , Vk.name = "main"
-                                                                                                                                                                              }]
-                                                                                                                         , Vk.vertexInputState = Just zero
-                                                                                                                         , Vk.inputAssemblyState = Just zero { Vk.topology = Vk.PRIMITIVE_TOPOLOGY_TRIANGLE_LIST }
-                                                                                                                         , Vk.tessellationState = Just zero
-                                                                                                                         , Vk.viewportState = Just $ SomeStruct zero { Vk.viewports = V.fromList [zero { Vk.x = 0
-                                                                                                                                                                                                       , Vk.y = 0
-                                                                                                                                                                                                       , Vk.width = fromIntegral caps.currentExtent.width
-                                                                                                                                                                                                       , Vk.height = fromIntegral caps.currentExtent.height
-                                                                                                                                                                                                       , Vk.minDepth = 0
-                                                                                                                                                                                                       , Vk.maxDepth = 1
-                                                                                                                                                                                                       }]
-                                                                                                                                                                     , Vk.scissors = V.fromList [(zero :: Vk.Rect2D) { Vk.offset = zero
-                                                                                                                                                                                                                     , Vk.extent = caps.currentExtent
-                                                                                                                                                                                                                     }]
-                                                                                                                                                                     }
-                                                                                                                         , Vk.rasterizationState = Just $ SomeStruct zero { Vk.depthClampEnable = False
-                                                                                                                                                                          , Vk.rasterizerDiscardEnable = False
-                                                                                                                                                                          , Vk.polygonMode = Vk.POLYGON_MODE_FILL
-                                                                                                                                                                          , Vk.cullMode = Vk.CULL_MODE_NONE
-                                                                                                                                                                          , Vk.frontFace = Vk.FRONT_FACE_CLOCKWISE
-                                                                                                                                                                          , Vk.depthBiasEnable = False
-                                                                                                                                                                          , Vk.lineWidth = 1
-                                                                                                                                                                          }
-                                                                                                                         , Vk.multisampleState = Just $ SomeStruct zero { Vk.sampleShadingEnable = False
-                                                                                                                                                                        , Vk.rasterizationSamples = Vk.SAMPLE_COUNT_1_BIT
-                                                                                                                                                                        }
-                                                                                                                         , Vk.depthStencilState = Nothing
-                                                                                                                         , Vk.colorBlendState = Just $ SomeStruct zero { Vk.attachments = V.singleton zero { Vk.blendEnable = False }}
-                                                                                                                         , Vk.layout = pipelineLayout
-                                                                                                                         , Vk.renderPass = pass
-                                                                                                                         , Vk.subpass = 0
-                                                                                                                         }]) Nothing bracket $ \(_, pipelines) -> do
-                                                    let pipeline = V.head pipelines
-                                                    Vk.withSemaphore dev zero Nothing bracket $ \sImageAvailable -> do
-                                                        withSemaphores dev (V.fromList (take (V.length imageViews) (repeat zero))) Nothing $ \sRenderFinisheds -> do
-                                                            Vk.withFence dev (zero { Vk.flags = Vk.FENCE_CREATE_SIGNALED_BIT }) Nothing bracket $ \fInFlight -> do
-                                                                ret <- gameloop dev swapchain gcbuffer gqueue fbs pass pipeline window (V.cons sImageAvailable sRenderFinisheds) fInFlight 0
-                                                                putStr "gameloop returned"
-                                                                Vk.deviceWaitIdle dev
 
-gameloop :: Vk.Device -> Vk.SwapchainKHR -> Vk.CommandBuffer -> Vk.Queue -> Vector Vk.Framebuffer -> Vk.RenderPass -> Vk.Pipeline -> Ptr RGFW.RGFW_window -> Vector Vk.Semaphore -> Vk.Fence -> RGFW.RGFW_bool -> IO ()
-gameloop dev swapchain gcbuffer queue fbs pass pipeline window ss f 0 = do
-    RGFW.rGFW_pollEvents
-    let fs = V.singleton f
-    let sImageAvailable = V.head ss
-    let sRenderFinisheds = V.tail ss
-    _ <- Vk.waitForFences dev fs True 18446744073709551615
-    Vk.resetFences dev fs
-    (_, imageIndex) <- Vk.acquireNextImageKHR dev swapchain 18446744073709551615 sImageAvailable zero
-    Vk.resetCommandBuffer gcbuffer zero
-    Vk.useCommandBuffer gcbuffer zero $ do
-        Vk.cmdUseRenderPass gcbuffer (zero { Vk.renderPass = pass
-                                           , Vk.framebuffer = (V.!) fbs $ fromIntegral imageIndex
-                                           , Vk.renderArea = (zero :: Vk.Rect2D) { Vk.offset = zero
-                                                                                 , Vk.extent = zero { Vk.width = fromIntegral width
-                                                                                                    , Vk.height = fromIntegral height
-                                                                                                    }
-                                                                                 }
-                                           , Vk.clearValues = V.singleton (Vk.Color $ Vk.Float32 1 0 1 1)
-                                           }) Vk.SUBPASS_CONTENTS_INLINE $ do
-            Vk.cmdBindPipeline gcbuffer Vk.PIPELINE_BIND_POINT_GRAPHICS pipeline
-            Vk.cmdDraw gcbuffer 3 1 0 0
-    Vk.queueSubmit queue (V.singleton (SomeStruct zero { Vk.waitSemaphores = V.singleton sImageAvailable
-                                                       , Vk.waitDstStageMask = V.singleton Vk.PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT
-                                                       , Vk.commandBuffers = V.singleton $ Vk.commandBufferHandle gcbuffer
-                                                       , Vk.signalSemaphores = V.singleton $ (V.!) sRenderFinisheds (fromIntegral imageIndex)
-                                                       })) f
-    _ <- Vk.queuePresentKHR queue (zero { Vk.waitSemaphores = V.singleton $ (V.!) sRenderFinisheds (fromIntegral imageIndex)
+    Vk.withInstance (instanceConfig exts) Nothing bracket $ \i -> do
+
+    withWindow "test window" 0 0 width height ((fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowCenter)) .|. (fromIntegral (RGFW.unwrapRGFW_windowFlags_enum RGFW.RGFW_windowNoResize))) $ \window -> do
+
+    surface :: Vk.SurfaceKHR <- alloca $ \surfacePtr -> do
+        _ <- RGFW.rGFW_window_createSurface_Vulkan window (coerce $ Vk.instanceHandle i) surfacePtr
+        return . unsafeCoerce =<< peek surfacePtr
+    (_, pdevs) <- Vk.enumeratePhysicalDevices i
+    (pdev, q) <- pickPhysicalDevice pdevs surface
+    let gqueueIndex = fromIntegral $ head $ getGraphicsQueues q
+
+    Vk.withDevice pdev (deviceConfig gqueueIndex) Nothing bracket $ \dev -> do
+    gqueue <- Vk.getDeviceQueue dev gqueueIndex 0
+
+    Vk.withCommandPool dev (commandPoolConfig gqueueIndex) Nothing bracket $ \gpool -> do
+    Vk.withSwapchainKHR dev (swapchainConfig q surface) Nothing bracket $ \swapchain -> do
+    
+    (_, images) <- Vk.getSwapchainImagesKHR dev swapchain
+    withImageViews dev (imageViewConfigs images q) Nothing $ \imageViews -> do
+
+    withSemaphores dev (V.fromList (take (fromIntegral consts.framesInFlight) (repeat zero))) Nothing $ \sImageAcquired -> do
+    withSemaphores dev (V.fromList (take (V.length images) (repeat zero))) Nothing $ \sRenderFinisheds -> do
+    withFences dev (V.fromList (take (fromIntegral consts.framesInFlight) (repeat ((zero :: Vk.FenceCreateInfo '[]) { Vk.flags = Vk.FENCE_CREATE_SIGNALED_BIT })))) Nothing $ \fences -> do
+
+    Vk.withCommandBuffers dev (commandBufferConfig gpool) bracket $ \cbuffers -> do
+
+    rawVert <- BS.readFile Shaders.vertPath
+    rawFrag <- BS.readFile Shaders.fragPath
+    withShaderModules dev (V.fromList [ zero { Vk.code = rawVert }, zero { Vk.code = rawFrag } ]) Nothing $ \mods -> do
+
+    let vertMod = V.head mods
+    let fragMod = V.head $ V.tail mods
+    Vk.withPipelineLayout dev (pipelineLayoutConfig) Nothing bracket $ \pipelineLayout -> do
+
+    Vk.withGraphicsPipelines dev zero (V.singleton $ SomeStruct (graphicsPipelineConfig q vertMod fragMod pipelineLayout)) Nothing bracket $ \(_, pipelines) -> do
+
+    let pipeline = V.head pipelines
+    gameloop' dev q pipeline swapchain imageViews images cbuffers gqueue sImageAcquired sRenderFinisheds fences 0 window 0
+
+
+gameloop' :: Vk.Device -> QueriedData -> Vk.Pipeline -> Vk.SwapchainKHR -> Vector Vk.ImageView -> Vector Vk.Image -> Vector Vk.CommandBuffer -> Vk.Queue -> Vector Vk.Semaphore -> Vector Vk.Semaphore -> Vector Vk.Fence -> Int -> Ptr RGFW.RGFW_window -> RGFW.RGFW_bool -> IO ()
+gameloop' dev q pipeline swapchain imageViews images cbuffers queue sImageAcquireds sRenderFinisheds fences frameIndex window 0 = do
+    let cbuffer = (V.!) cbuffers frameIndex
+        sImageAcquired = (V.!) sImageAcquireds frameIndex
+        fence = V.singleton $ (V.!) fences frameIndex
+    _ <- Vk.waitForFences dev fence True 18446744073709551615
+    Vk.resetFences dev fence
+    (_, imageIndex) <- Vk.acquireNextImageKHR dev swapchain 18446744073709551615 sImageAcquired zero
+    let imageView = (V.!) imageViews $ fromIntegral imageIndex
+        image = (V.!) images $ fromIntegral imageIndex
+        sRenderFinished = (V.!) sRenderFinisheds $ fromIntegral imageIndex
+    Vk.resetCommandBuffer cbuffer zero
+    Vk.useCommandBuffer cbuffer ((zero :: Vk.CommandBufferBeginInfo '[]) { Vk.flags = Vk.COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT }) $ do
+        Vk.cmdPipelineBarrier2 cbuffer $ zero { Vk.imageMemoryBarriers = V.singleton $ SomeStruct zero { Vk.srcStageMask = Vk.PIPELINE_STAGE_2_NONE
+                                                                                                       , Vk.srcAccessMask = Vk.ACCESS_2_NONE
+                                                                                                       , Vk.dstStageMask = Vk.PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                                                                                                       , Vk.dstAccessMask = Vk.ACCESS_2_COLOR_ATTACHMENT_READ_BIT .|. Vk.ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                                                                                                       , Vk.oldLayout = Vk.IMAGE_LAYOUT_UNDEFINED
+                                                                                                       , Vk.newLayout = Vk.IMAGE_LAYOUT_ATTACHMENT_OPTIMAL
+                                                                                                       , Vk.image = image
+                                                                                                       , Vk.subresourceRange = zero { Vk.aspectMask = Vk.IMAGE_ASPECT_COLOR_BIT
+                                                                                                                                    , Vk.levelCount = 1
+                                                                                                                                    , Vk.layerCount = 1
+                                                                                                                                    }
+                                                                                                       }
+                                              }
+        Vk.cmdUseRendering cbuffer (zero { Vk.renderArea = zero { Vk.extent = q.surfaceCapabilities.currentExtent }
+                                         , Vk.layerCount = 1
+                                         , Vk.colorAttachments = V.singleton $ (SomeStruct) zero { Vk.imageView = imageView
+                                                                                                 , Vk.imageLayout = Vk.IMAGE_LAYOUT_ATTACHMENT_OPTIMAL
+                                                                                                 , Vk.loadOp = Vk.ATTACHMENT_LOAD_OP_CLEAR
+                                                                                                 , Vk.storeOp = Vk.ATTACHMENT_STORE_OP_STORE
+                                                                                                 , Vk.clearValue = Vk.Color $ Vk.Float32 0 0 1 1
+                                                                                                 }
+                                         }) $ do
+            Vk.cmdSetViewport cbuffer 0 $ V.singleton zero { Vk.x = 0
+                                                           , Vk.y = 0
+                                                           , Vk.width = fromIntegral q.surfaceCapabilities.currentExtent.width
+                                                           , Vk.height = fromIntegral q.surfaceCapabilities.currentExtent.height
+                                                           , Vk.minDepth = 0
+                                                           , Vk.maxDepth = 1
+                                                           }
+            Vk.cmdSetScissor cbuffer 0 $ V.singleton zero { Vk.offset = zero
+                                                          , Vk.extent = q.surfaceCapabilities.currentExtent
+                                                          }
+            Vk.cmdBindPipeline cbuffer Vk.PIPELINE_BIND_POINT_GRAPHICS pipeline
+            Vk.cmdDraw cbuffer 3 0 0 0
+        Vk.cmdPipelineBarrier2 cbuffer $ zero { Vk.imageMemoryBarriers = V.singleton $ SomeStruct zero { Vk.srcStageMask = Vk.PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                                                                                                       , Vk.srcAccessMask = Vk.ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT
+                                       	                                                               , Vk.dstStageMask = Vk.PIPELINE_STAGE_2_NONE
+                                                                                                       , Vk.dstAccessMask = Vk.ACCESS_2_NONE
+                                                                                                       , Vk.oldLayout = Vk.IMAGE_LAYOUT_ATTACHMENT_OPTIMAL
+                                                                                                       , Vk.newLayout = Vk.IMAGE_LAYOUT_PRESENT_SRC_KHR
+                                                                                                       , Vk.image = image
+                                                                                                       , Vk.subresourceRange = zero { Vk.aspectMask = Vk.IMAGE_ASPECT_COLOR_BIT
+                                                                                                                                    , Vk.levelCount = 1
+                                                                                                                                    , Vk.layerCount = 1
+                                                                                                                                    }
+                                                                                                      	}
+                                              }
+    Vk.queueSubmit2 queue (V.singleton (SomeStruct zero { Vk.waitSemaphoreInfos = V.singleton $ zero { Vk.semaphore = sImageAcquired
+                                                                                                     , Vk.stageMask = Vk.PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                                                                                                     }
+                                                        , Vk.commandBufferInfos = V.singleton $ SomeStruct zero { Vk.commandBuffer = Vk.commandBufferHandle cbuffer }
+                                                        , Vk.signalSemaphoreInfos = V.singleton $ zero { Vk.semaphore = sRenderFinished
+                                                                                                       , Vk.stageMask = Vk.PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT
+                                                                                                       }
+                                                        })) $ V.head fence
+    _ <- Vk.queuePresentKHR queue (zero { Vk.waitSemaphores = V.singleton sRenderFinished
                                         , Vk.swapchains = V.singleton swapchain
                                         , Vk.imageIndices = V.singleton imageIndex
                                         })
-    gameloop dev swapchain gcbuffer queue fbs pass pipeline window ss f =<< RGFW.rGFW_window_shouldClose window
-gameloop _ _ _ _ _ _ _ _ _ _ _ = return ()
+    RGFW.rGFW_pollEvents
+    gameloop' dev q pipeline swapchain imageViews images cbuffers queue sImageAcquireds sRenderFinisheds fences (mod (frameIndex + 1) (fromIntegral consts.framesInFlight)) window =<< RGFW.rGFW_window_shouldClose window
+gameloop' dev _ _ _ _ _ _ _ _ _ _ _ _ _ =
+    Vk.deviceWaitIdle dev
 
-pickPhysicalDevice :: Vector Vk.PhysicalDevice -> Vk.SurfaceKHR -> IO Vk.PhysicalDevice
+pickPhysicalDevice :: Vector Vk.PhysicalDevice -> Vk.SurfaceKHR -> IO (Vk.PhysicalDevice, QueriedData)
 pickPhysicalDevice pdevs surface = do
-    validpdevs <- (V.filterM (\o -> isValidPhysicalDevice o surface) pdevs)
+    queriedDevs <- do
+        qs <- V.mapM (\pdev -> (queryPhysicalDevice pdev surface)) pdevs
+        return $ V.zip pdevs qs
+    let validpdevs = V.filter isValidPhysicalDevice queriedDevs
     pickPhysicalDevice' validpdevs V.empty
 
-pickPhysicalDevice' :: Vector Vk.PhysicalDevice -> Vector Vk.PhysicalDevice -> IO Vk.PhysicalDevice
+pickPhysicalDevice' :: Vector (Vk.PhysicalDevice, QueriedData) -> Vector (Vk.PhysicalDevice, QueriedData) -> IO (Vk.PhysicalDevice, QueriedData)
 pickPhysicalDevice' pdevs opts =
     if V.null pdevs
-    then do
-        props <- Vk.getPhysicalDeviceProperties $ V.head opts
-        return $ V.head opts
+    then return $ (V.head opts)
     else do
-        props <- Vk.getPhysicalDeviceProperties $ V.head pdevs
-        case props.deviceType of
-            Vk.PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> pickPhysicalDevice' (V.tail pdevs) (V.cons (V.head pdevs) opts)
+        let pdev = V.head pdevs
+        case (snd pdev).physicalDeviceProperties.deviceType of
+            Vk.PHYSICAL_DEVICE_TYPE_DISCRETE_GPU -> pickPhysicalDevice' (V.tail pdevs) (V.cons pdev opts)
             Vk.PHYSICAL_DEVICE_TYPE_CPU -> pickPhysicalDevice' (V.tail pdevs) opts
-            _ -> pickPhysicalDevice' (V.tail pdevs) (V.snoc opts (V.head pdevs))
+            _ -> pickPhysicalDevice' (V.tail pdevs) (V.snoc opts pdev)
 
 -- returns list of queueFamilyIndex whick support a graphics pipeline
-getGraphicsQueues :: Vector Vk.QueueFamilyProperties -> [Int]
-getGraphicsQueues qfprops = getGraphicsQueues' qfprops 0 []
-
+getGraphicsQueues :: QueriedData -> [Int]
+getGraphicsQueues q = getGraphicsQueues' q.queueFamilyProperties 0 []
 getGraphicsQueues' :: Vector Vk.QueueFamilyProperties -> Int -> [Int] -> [Int]
 getGraphicsQueues' qfprops i is =
     if V.null qfprops then is else
@@ -268,19 +349,32 @@ getSurfaceSupport' pdev surface i is = if i < 0 then return is else do
     then getSurfaceSupport' pdev surface (i - 1) (i:is)
     else getSurfaceSupport' pdev surface (i - 1) is
 
--- checks that a device has the requisite capabilities
-isValidPhysicalDevice :: Vk.PhysicalDevice -> Vk.SurfaceKHR-> IO Bool
-isValidPhysicalDevice pdev surface = do
+queryPhysicalDevice :: Vk.PhysicalDevice -> Vk.SurfaceKHR -> IO QueriedData
+queryPhysicalDevice pdev surface = do
     qfprops <- Vk.getPhysicalDeviceQueueFamilyProperties pdev
-    surfaceSupport <- getSurfaceSupport pdev surface
-    (_, caps) <- Vk.enumerateDeviceExtensionProperties pdev Nothing
-    if null $ getGraphicsQueues qfprops
-    then return False
-    else if null surfaceSupport
-    then return False
-    else if [] /= ((V.toList extensions) \\ (V.toList $ V.map (\p -> p.extensionName) caps))
-    then return False
-    else return True
+    sSupport <- getSurfaceSupport pdev surface
+    (_, extps) <- Vk.enumerateDeviceExtensionProperties pdev Nothing
+    caps <- Vk.getPhysicalDeviceSurfaceCapabilitiesKHR pdev surface
+    (_, forms) <- Vk.getPhysicalDeviceSurfaceFormatsKHR pdev surface
+    props <- Vk.getPhysicalDeviceProperties pdev
+    return QueriedData { surfaceCapabilities      = caps
+                       , surfaceSupport           = sSupport
+                       , surfaceFormats           = forms
+                       , queueFamilyProperties    = qfprops
+                       , extensionProperties      = extps
+                       , physicalDeviceProperties = props
+                       }
+
+-- checks that a device has the requisite capabilities
+isValidPhysicalDevice :: (Vk.PhysicalDevice, QueriedData) -> Bool
+isValidPhysicalDevice (_, q) =
+    if null $ getGraphicsQueues q
+    then False
+    else if null q.surfaceSupport
+    then False
+    else if [] /= ((V.toList extensions) \\ (V.toList $ V.map (\p -> p.extensionName) q.extensionProperties))
+    then False
+    else True
 
 -- type conversion
 processExtensions :: CSize -> Ptr (ConstPtr CChar) -> Vector ByteString -> IO (Vector ByteString)
@@ -290,18 +384,18 @@ processExtensions count strs extNames = do
     extName <- BS.packCString (coerce str)
     processExtensions (count - 1) (advancePtr strs 1) $ V.snoc extNames extName
 
+withFences :: Vk.Device -> Vector (Vk.FenceCreateInfo '[]) -> Maybe Vk.AllocationCallbacks -> (Vector Vk.Fence -> IO r) -> IO r
+withFences dev infos alloc io = do
+    fs <- mapM (\info -> Vk.createFence dev info alloc) infos
+    o0 <- io fs
+    _ <- mapM (\f -> Vk.destroyFence dev f alloc) fs
+    return o0
+
 withSemaphores :: Vk.Device -> Vector (Vk.SemaphoreCreateInfo '[]) -> Maybe Vk.AllocationCallbacks -> (Vector Vk.Semaphore -> IO r) -> IO r
 withSemaphores dev infos alloc io = do
     ss <- mapM (\info -> Vk.createSemaphore dev info alloc) infos
     o0 <- io ss
     _ <- mapM (\s -> Vk.destroySemaphore dev s alloc) ss
-    return o0
-
-withFramebuffers :: Vk.Device -> Vector (Vk.FramebufferCreateInfo '[]) -> Maybe Vk.AllocationCallbacks -> (Vector Vk.Framebuffer -> IO r) -> IO r
-withFramebuffers dev infos alloc io = do
-    fbs <- mapM (\info -> Vk.createFramebuffer dev info alloc) infos
-    o0 <- io fbs
-    _ <- mapM (\fb -> Vk.destroyFramebuffer dev fb alloc) fbs
     return o0
 
 withImageViews :: Vk.Device -> Vector (Vk.ImageViewCreateInfo '[]) -> Maybe Vk.AllocationCallbacks -> (Vector Vk.ImageView -> IO r) -> IO r
