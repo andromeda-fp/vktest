@@ -90,13 +90,13 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
                                                      , Vk.imageArrayLayers = 1
                                                      , Vk.imageColorSpace = (V.head forms).colorSpace
                                                      , Vk.imageExtent = caps.currentExtent
-                                                     , Vk.imageFormat = (V.head forms).format -- TODO fetch the best format
+                                                     , Vk.imageFormat = (V.head forms).format
                                                      , Vk.imageSharingMode = Vk.SHARING_MODE_EXCLUSIVE
                                                      , Vk.imageUsage = Vk.IMAGE_USAGE_COLOR_ATTACHMENT_BIT
                                                      , Vk.minImageCount = caps.minImageCount
                                                      , Vk.presentMode = Vk.PRESENT_MODE_FIFO_KHR
                                                      , Vk.preTransform = caps.currentTransform
-                                                     , Vk.queueFamilyIndices = V.singleton gqueueIndex -- TODO what if pqueue and gqueue are different!?
+                                                     , Vk.queueFamilyIndices = V.singleton gqueueIndex
                                                      , Vk.surface = surface
                                                      } Nothing bracket $ \swapchain -> do
                             (_, images) <- Vk.getSwapchainImagesKHR dev swapchain
@@ -106,12 +106,12 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
                                                                                                                                    , Vk.levelCount = Vk.REMAINING_MIP_LEVELS
                                                                                                                                    , Vk.layerCount = Vk.REMAINING_ARRAY_LAYERS
                                                                                                                                    }
-                                                                                                      , Vk.format = (V.head forms).format -- TODO fetch the best format
+                                                                                                      , Vk.format = (V.head forms).format
                                                                                                       }) images) Nothing $ \imageViews -> do
                                 let colorAttachmentRef = zero { Vk.attachment = 0
                                                               , Vk.layout = Vk.IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL
                                                               }
-                                let colorAttachment = zero { Vk.format = (V.head forms).format -- TODO fetch the best format
+                                let colorAttachment = zero { Vk.format = (V.head forms).format
                                                            , Vk.samples = Vk.SAMPLE_COUNT_1_BIT
                                                            , Vk.loadOp = Vk.ATTACHMENT_LOAD_OP_CLEAR
                                                            , Vk.storeOp = Vk.ATTACHMENT_STORE_OP_STORE
@@ -119,7 +119,7 @@ main = withRGFW "rgfw instance title" (fromIntegral $ RGFW.unwrapRGFW_initFlags_
                                                            , Vk.stencilStoreOp = Vk.ATTACHMENT_STORE_OP_DONT_CARE
                                                            , Vk.initialLayout = Vk.IMAGE_LAYOUT_UNDEFINED
                                                            , Vk.finalLayout = Vk.IMAGE_LAYOUT_PRESENT_SRC_KHR
-                                                           } 
+                                                           }
                                 Vk.withRenderPass dev zero { Vk.attachments = V.singleton colorAttachment
                                                            , Vk.subpasses = V.singleton zero { Vk.pipelineBindPoint = Vk.PIPELINE_BIND_POINT_GRAPHICS
                                                                                              , Vk.colorAttachments = V.singleton colorAttachmentRef
