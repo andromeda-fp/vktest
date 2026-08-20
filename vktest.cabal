@@ -15,8 +15,6 @@ executable vktest
                       Shaders,
     build-depends:    base             >= 4.20.2,
                       bytestring       >= 0.12,
-                      directory        >= 1.3,
-                      template-haskell >= 2.24,
                       vector           >= 0.13,
                       vulkan           >= 3.27,
                       hs-bindgen,
