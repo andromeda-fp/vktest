@@ -5,8 +5,7 @@
 {-# LANGUAGE TypeApplications #-}
 {-# LANGUAGE TypeOperators #-}
 
--- from the FIR docs
-module Shaders where
+module VkTest.Shaders where
 
 import FIR
 import Math.Linear
